@@ -2,27 +2,24 @@
 set -euo pipefail
 
 # =============================================================================
-# release.sh — macOS GitHub Release (wrapper)
+# release.sh - macOS GitHub Release wrapper
 #
-# Builds macOS artifacts and creates a draft GitHub release with the next
-# version tag. Build Windows on a Windows machine with the same tag:
+# Default behavior builds macOS artifacts and creates a draft GitHub release
+# with the next version tag. Windows artifacts are built separately on Windows.
+# The legacy --all flag is kept as a macOS-only alias.
 #
-#   ./scripts/release-mac.sh              # or ./scripts/release.sh
-#   ./scripts/release-win.sh --tag vX.Y.Z
+#   bash ./scripts/release-mac.sh              # or bash ./scripts/release.sh
+#   bash ./scripts/release.sh --r2
+#   .\scripts\release-win.ps1 -Tag v0.1.3 -R2 -PromoteR2
 #
-# Use --publish on release-win.sh after both platforms are uploaded.
-#
-# Legacy --all is removed (cross-compiling node-pty on Mac for Windows fails).
 # =============================================================================
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [[ "${1:-}" == "--all" ]]; then
-  printf '\033[31m%s\033[0m\n' "[ERROR] --all is no longer supported." >&2
-  echo "Build each platform on its native OS:" >&2
-  echo "  macOS:   ./scripts/release-mac.sh" >&2
-  echo "  Windows: ./scripts/release-win.sh --tag v<version from mac build>" >&2
-  exit 1
+  shift
+  echo "release.sh --all is deprecated; building macOS assets only." >&2
+  echo "Run npm run release:win on Windows for Windows assets." >&2
 fi
 
 exec "${ROOT}/scripts/release-mac.sh" "$@"

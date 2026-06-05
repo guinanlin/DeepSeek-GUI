@@ -35,10 +35,12 @@ import { useChatStore } from '../../store/chat-store'
 
 const LANGUAGE_REGEX = /language-([^\s]+)/
 const TRAILING_NEWLINES_REGEX = /\n+$/
+const PLAIN_TEXT_LANGUAGES = new Set(['', 'plain', 'plaintext', 'text', 'txt'])
 const COLLAPSE_HEIGHT = 200
 const COPY_RESET_MS = 2000
 
 type CodeProps = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
+  'data-block'?: string | boolean
   node?: Element | undefined
 }
 
@@ -89,6 +91,21 @@ function downloadCode(code: string, language: string): void {
   URL.revokeObjectURL(url)
 }
 
+function isPlainTextLanguage(language: string): boolean {
+  return PLAIN_TEXT_LANGUAGES.has(language.trim().toLowerCase())
+}
+
+function PlainTextBlock({ code }: { code: string }): ReactNode {
+  const trimmedCode = code.replace(TRAILING_NEWLINES_REGEX, '')
+  if (!trimmedCode.trim()) return null
+
+  return (
+    <div className="ds-plain-text-block" data-streamdown="plain-text-block">
+      {trimmedCode}
+    </div>
+  )
+}
+
 function inlineFileReference(text: string): { text: string; target: FileReferenceTarget } | null {
   const trimmed = text.trim()
   if (!trimmed) return null
@@ -133,7 +150,7 @@ function InlineFileReferenceCode({
         void window.dsGui?.logError?.('editor-open', 'Failed to open inline file reference', {
           message: result.message,
           target: resolvedTarget
-        })
+        })?.catch(() => undefined)
       }
     })
   }
@@ -210,10 +227,14 @@ function CodeBlock({
 
   const handleCopy = async (): Promise<void> => {
     if (!navigator?.clipboard?.writeText) return
-    await navigator.clipboard.writeText(trimmedCode)
-    setIsCopied(true)
-    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
-    copyResetRef.current = window.setTimeout(() => setIsCopied(false), COPY_RESET_MS)
+    try {
+      await navigator.clipboard.writeText(trimmedCode)
+      setIsCopied(true)
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current)
+      copyResetRef.current = window.setTimeout(() => setIsCopied(false), COPY_RESET_MS)
+    } catch {
+      setIsCopied(false)
+    }
   }
 
   return (
@@ -297,10 +318,13 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
   const startLine = node?.position?.start?.line
   const endLine = node?.position?.end?.line
   const hasLanguageClass = LANGUAGE_REGEX.test(className ?? '')
-  const inline =
-    typeof startLine === 'number' && typeof endLine === 'number'
+  const isFencedBlock = props['data-block'] !== undefined
+  const hasNodePosition = typeof startLine === 'number' && typeof endLine === 'number'
+  const inline = !isFencedBlock && (
+    hasNodePosition
       ? startLine === endLine
       : !hasLanguageClass && !text.includes('\n')
+  )
 
   if (inline) {
     const fileReference = inlineFileReference(text)
@@ -327,6 +351,10 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
 
   const match = className?.match(LANGUAGE_REGEX)
   const language = match?.[1] ?? ''
+
+  if (isPlainTextLanguage(language)) {
+    return <PlainTextBlock code={text} />
+  }
 
   return <CodeBlock code={text} language={language} />
 }

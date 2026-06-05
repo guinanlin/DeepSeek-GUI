@@ -7,9 +7,19 @@ import {
   resolveWriteMarkdownResourcePath
 } from '../components/write/WriteMarkdownPreview'
 import {
-  highlightCodeHtml,
-  renderFallbackCodeHtml
-} from '../lib/code-highlighting'
+  CodeBlockToolbarWidget,
+  CodeBlockWidget,
+  HrWidget,
+  ImageWidget,
+  ListBulletWidget,
+  TableWidget,
+  TaskCheckboxWidget,
+  closingFencePattern,
+  openingFence,
+  parseFencedCodeBlock,
+  type CodeBlockRange,
+  type ParsedTable
+} from './markdown-live-widgets'
 
 type DecorationRange = {
   from: number
@@ -101,371 +111,14 @@ const writeMarkdownLiveTheme = EditorView.theme({
   }
 })
 
-class HrWidget extends WidgetType {
-  eq(): boolean {
-    return true
-  }
-
-  toDOM(): HTMLElement {
-    const element = document.createElement('div')
-    element.className = 'cm-write-md-hr'
-    return element
-  }
-}
-
-class ListBulletWidget extends WidgetType {
-  eq(): boolean {
-    return true
-  }
-
-  toDOM(): HTMLElement {
-    const element = document.createElement('span')
-    element.className = 'cm-write-md-list-bullet'
-    return element
-  }
-}
-
-class TaskCheckboxWidget extends WidgetType {
-  constructor(
-    private checked: boolean,
-    private from: number,
-    private to: number
-  ) {
-    super()
-  }
-
-  eq(other: TaskCheckboxWidget): boolean {
-    return other.checked === this.checked && other.from === this.from && other.to === this.to
-  }
-
-  toDOM(view: EditorView): HTMLElement {
-    const label = document.createElement('label')
-    label.className = 'cm-write-md-task'
-    const checkbox = document.createElement('input')
-    checkbox.type = 'checkbox'
-    checkbox.checked = this.checked
-    checkbox.tabIndex = -1
-    checkbox.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      const insert = this.checked ? '[ ]' : '[x]'
-      view.focus()
-      view.dispatch({
-        changes: { from: this.from, to: this.to, insert },
-        selection: EditorSelection.cursor(this.from + insert.length)
-      })
-    })
-    label.appendChild(checkbox)
-    return label
-  }
-}
-
-class ImageWidget extends WidgetType {
-  constructor(
-    private src: string,
-    private alt: string,
-    private localPath?: string
-  ) {
-    super()
-  }
-
-  eq(other: ImageWidget): boolean {
-    return other.src === this.src && other.alt === this.alt && other.localPath === this.localPath
-  }
-
-  toDOM(): HTMLElement {
-    const wrapper = document.createElement('span')
-    wrapper.className = 'cm-write-md-image-wrap'
-    const image = document.createElement('img')
-    image.className = 'cm-write-md-image'
-    image.src = this.src
-    image.alt = this.alt
-    image.loading = 'lazy'
-    wrapper.appendChild(image)
-    if (this.localPath && typeof window.dsGui?.readWorkspaceImage === 'function') {
-      void window.dsGui.readWorkspaceImage({ path: this.localPath })
-        .then((result) => {
-          if (result.ok) image.src = result.dataUrl
-        })
-        .catch(() => undefined)
-    }
-    return wrapper
-  }
-}
-
-type ParsedTable = {
-  headers: string[]
-  rows: string[][]
-}
-
-type ParsedCodeBlock = {
-  code: string
-  language: string
-}
-
-type CodeBlockRange = BlockRange & {
-  block: ParsedCodeBlock
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function parseFencedCodeBlock(source: string): ParsedCodeBlock {
-  const normalized = source.replace(/\r\n?/g, '\n')
-  const lines = normalized.split('\n')
-  const opener = lines[0] ?? ''
-  const match = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(opener)
-  if (!match) return { code: normalized, language: '' }
-
-  const fence = match[2]
-  const language = match[3].trim().split(/\s+/)[0] ?? ''
-  const body = lines.slice(1)
-  const closingPattern = new RegExp(`^\\s*${escapeRegExp(fence[0])}{${fence.length},}\\s*$`)
-  if (body.length > 0 && closingPattern.test(body[body.length - 1] ?? '')) {
-    body.pop()
-  }
-  return { code: body.join('\n'), language }
-}
-
-function openingFence(line: string): { marker: string; language: string } | null {
-  const match = /^(?: {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
-  if (!match) return null
-  return {
-    marker: match[1],
-    language: match[2].trim().split(/\s+/)[0] ?? ''
-  }
-}
-
-function closingFencePattern(marker: string): RegExp {
-  return new RegExp(`^(?: {0,3})${escapeRegExp(marker[0])}{${marker.length},}\\s*$`)
-}
-
-class TableWidget extends WidgetType {
-  constructor(private table: ParsedTable) {
-    super()
-  }
-
-  eq(other: TableWidget): boolean {
-    return JSON.stringify(other.table) === JSON.stringify(this.table)
-  }
-
-  toDOM(): HTMLElement {
-    const table = document.createElement('table')
-    table.className = 'cm-write-md-table'
-    const thead = document.createElement('thead')
-    const headerRow = document.createElement('tr')
-    for (const header of this.table.headers) {
-      const cell = document.createElement('th')
-      cell.textContent = header
-      headerRow.appendChild(cell)
-    }
-    thead.appendChild(headerRow)
-    table.appendChild(thead)
-
-    const tbody = document.createElement('tbody')
-    for (const row of this.table.rows) {
-      const tr = document.createElement('tr')
-      for (const cellText of row) {
-        const cell = document.createElement('td')
-        cell.textContent = cellText
-        tr.appendChild(cell)
-      }
-      tbody.appendChild(tr)
-    }
-    table.appendChild(tbody)
-    return table
-  }
-}
-
-class CodeBlockWidget extends WidgetType {
-  constructor(
-    private block: ParsedCodeBlock,
-    private from: number,
-    private to: number
-  ) {
-    super()
-  }
-
-  eq(other: CodeBlockWidget): boolean {
-    return other.block.code === this.block.code &&
-      other.block.language === this.block.language &&
-      other.from === this.from &&
-      other.to === this.to
-  }
-
-  private lineIndexFromClick(event: MouseEvent, html: HTMLElement): number {
-    const lines = Array.from(html.querySelectorAll<HTMLElement>('.line'))
-    if (lines.length === 0) return 0
-
-    const target = event.target instanceof Element ? event.target.closest<HTMLElement>('.line') : null
-    const targetIndex = target ? lines.indexOf(target) : -1
-    if (targetIndex >= 0) return targetIndex
-
-    const firstRect = lines[0].getBoundingClientRect()
-    const lastRect = lines[lines.length - 1].getBoundingClientRect()
-    if (event.clientY <= firstRect.top) return 0
-    if (event.clientY >= lastRect.bottom) return lines.length - 1
-
-    const index = lines.findIndex((line) => {
-      const rect = line.getBoundingClientRect()
-      return event.clientY >= rect.top && event.clientY <= rect.bottom
-    })
-    return index >= 0 ? index : 0
-  }
-
-  private editSourceAtClick(view: EditorView, event: MouseEvent, html: HTMLElement): void {
-    const startLine = view.state.doc.lineAt(this.from)
-    const endLine = view.state.doc.lineAt(Math.max(this.from, this.to - 1))
-    const sourceLineNumber = Math.min(
-      endLine.number,
-      startLine.number + 1 + this.lineIndexFromClick(event, html)
-    )
-    const sourceLine = view.state.doc.line(sourceLineNumber)
-    const columnOffset = Math.min(sourceLine.length, Math.max(0, Math.round((event.offsetX - 20) / 8)))
-
-    view.focus()
-    view.dispatch({
-      selection: EditorSelection.cursor(sourceLine.from + columnOffset),
-      scrollIntoView: true
-    })
-  }
-
-  toDOM(view: EditorView): HTMLElement {
-    const wrapper = document.createElement('div')
-    wrapper.className = 'cm-write-md-code-block'
-    wrapper.tabIndex = -1
-    wrapper.title = 'Click to edit code'
-
-    if (this.block.language) {
-      const label = document.createElement('div')
-      label.className = 'cm-write-md-code-lang'
-      label.textContent = this.block.language
-      wrapper.appendChild(label)
-    }
-
-    const body = document.createElement('div')
-    body.className = 'cm-write-md-code-block-body'
-    const html = document.createElement('div')
-    html.className = 'cm-write-md-code-block-html'
-    html.innerHTML = renderFallbackCodeHtml(this.block.code)
-    body.appendChild(html)
-    wrapper.appendChild(body)
-
-    wrapper.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) return
-      event.preventDefault()
-      this.editSourceAtClick(view, event, html)
-    })
-
-    void highlightCodeHtml(this.block.code, this.block.language).then((nextHtml) => {
-      if (!wrapper.isConnected) return
-      html.innerHTML = nextHtml
-    })
-
-    return wrapper
-  }
-}
-
-class CodeBlockToolbarWidget extends WidgetType {
-  constructor(private block: ParsedCodeBlock) {
-    super()
-  }
-
-  eq(other: CodeBlockToolbarWidget): boolean {
-    return other.block.code === this.block.code && other.block.language === this.block.language
-  }
-
-  toDOM(): HTMLElement {
-    const toolbar = document.createElement('span')
-    toolbar.className = 'cm-write-md-codeblock-toolbar'
-
-    if (this.block.language) {
-      const language = document.createElement('span')
-      language.className = 'cm-write-md-codeblock-lang'
-      language.textContent = this.block.language
-      toolbar.appendChild(language)
-    }
-
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'cm-write-md-codeblock-copy'
-    button.title = 'Copy code'
-    button.setAttribute('aria-label', 'Copy code')
-    button.textContent = 'copy'
-    button.addEventListener('mousedown', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-    })
-    button.addEventListener('click', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      const reset = (): void => {
-        button.dataset.copied = 'false'
-        button.dataset.copyFailed = 'false'
-        button.textContent = 'copy'
-        button.title = 'Copy code'
-        button.setAttribute('aria-label', 'Copy code')
-      }
-      const fallbackCopy = (): boolean => {
-        const textarea = document.createElement('textarea')
-        textarea.value = this.block.code
-        textarea.setAttribute('readonly', 'true')
-        textarea.style.position = 'fixed'
-        textarea.style.left = '-9999px'
-        textarea.style.top = '0'
-        document.body.appendChild(textarea)
-        textarea.focus()
-        textarea.select()
-        const ok = document.execCommand('copy')
-        document.body.removeChild(textarea)
-        return ok
-      }
-      const markCopied = (): void => {
-        button.dataset.copied = 'true'
-        button.dataset.copyFailed = 'false'
-        button.textContent = 'copied'
-        button.title = 'Copied'
-        button.setAttribute('aria-label', 'Copied')
-        window.setTimeout(reset, 1400)
-      }
-      const markFailed = (): void => {
-        button.dataset.copied = 'false'
-        button.dataset.copyFailed = 'true'
-        button.textContent = 'failed'
-        button.title = 'Copy failed'
-        button.setAttribute('aria-label', 'Copy failed')
-        window.setTimeout(reset, 1400)
-      }
-
-      if (navigator?.clipboard?.writeText) {
-        void navigator.clipboard.writeText(this.block.code).then(markCopied).catch(() => {
-          if (fallbackCopy()) markCopied()
-          else markFailed()
-        })
-        return
-      }
-
-      if (fallbackCopy()) markCopied()
-      else markFailed()
-    })
-
-    toolbar.appendChild(button)
-    return toolbar
-  }
-}
-
-const hrDecoration = Decoration.replace({
-  widget: new HrWidget()
-})
-
-const listBulletDeco = Decoration.replace({
-  widget: new ListBulletWidget()
-})
-
-function collectActiveLines(view: EditorView): Set<number> {
-  if (!view.hasFocus) return new Set()
+function collectRevealLines(view: EditorView): Set<number> {
+  if (!view.hasFocus || view.state.selection.ranges.some((range) => !range.empty)) return new Set()
   return collectActiveLinesFromState(view.state)
+}
+
+function collectRevealLinesFromState(state: EditorState, hasFocus: boolean): Set<number> {
+  if (!hasFocus || state.selection.ranges.some((range) => !range.empty)) return new Set()
+  return collectActiveLinesFromState(state)
 }
 
 function collectActiveLinesFromState(state: EditorState): Set<number> {
@@ -647,7 +300,8 @@ function collectMarkdownCodeBlockRangesFromState(
 }
 
 export const markdownLivePreviewTestInternals = {
-  collectMarkdownCodeBlockRangesFromState
+  collectMarkdownCodeBlockRangesFromState,
+  collectRevealLinesFromState
 }
 
 function addFencedCodeLineDecorations(
@@ -666,12 +320,12 @@ function addFencedCodeLineDecorations(
     }
   }
 
+  if (!blockActive) return
+
   for (let lineNumber = startLine.number; lineNumber <= endLine.number; lineNumber += 1) {
     const line = view.state.doc.line(lineNumber)
     ranges.push({ from: line.from, to: line.from, deco: codeBlockLineDeco })
   }
-
-  if (!blockActive) return
 
   if (startLine.from < startLine.to) {
     ranges.push({
@@ -746,7 +400,7 @@ function buildMarkdownBlockDecorations(state: EditorState): DecorationSet {
     ranges.push({
       from: tableRange.from,
       to: tableRange.to,
-      deco: Decoration.replace({ widget: new TableWidget(tableRange.table), block: true })
+      deco: Decoration.replace({ widget: new TableWidget(tableRange.table, tableRange.from, tableRange.to), block: true })
     })
   }
 
@@ -767,7 +421,7 @@ const markdownBlockPreviewField = StateField.define<DecorationSet>({
 })
 
 function buildMarkdownDecorations(view: EditorView): DecorationSet {
-  const activeLines = collectActiveLines(view)
+  const activeLines = collectRevealLines(view)
   const imageContext = view.state.facet(markdownImageContextFacet)
   const ranges: DecorationRange[] = []
   const renderedBlocks: BlockRange[] = []
@@ -808,7 +462,7 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
             break
           case 'HorizontalRule':
             if (!isActive) {
-              ranges.push({ from: node.from, to: node.to, deco: hrDecoration })
+              ranges.push({ from: node.from, to: node.to, deco: Decoration.replace({ widget: new HrWidget(node.from) }) })
               ranges.push({ from: line.from, to: line.from, deco: centerLineDeco })
             }
             return false
@@ -833,7 +487,7 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
               ranges.push({
                 from: node.from,
                 to: node.to,
-                deco: Decoration.replace({ widget: new ImageWidget(parsed.src, parsed.alt, parsed.localPath) })
+                deco: Decoration.replace({ widget: new ImageWidget(parsed.src, parsed.alt, node.from, parsed.localPath) })
               })
               return false
             }
@@ -864,7 +518,11 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
             if (/^ ?\[[ xX]\]/.test(rest)) {
               ranges.push({ from: node.from, to: hideTo, deco: hideMark })
             } else {
-              ranges.push({ from: node.from, to: hideTo, deco: listBulletDeco })
+              ranges.push({
+                from: node.from,
+                to: hideTo,
+                deco: Decoration.replace({ widget: new ListBulletWidget(node.from, hideTo) })
+              })
             }
             break
           }

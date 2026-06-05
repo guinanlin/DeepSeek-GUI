@@ -69,18 +69,34 @@ if (releaseAppVersion && !/^\d+\.\d+\.\d+$/.test(releaseAppVersion)) {
 module.exports = {
   appId: 'com.xingyuzhong.deepseekgui',
   productName: 'DeepSeek GUI',
-  // node-pty runs spawn-helper; binaries must live outside asar to be executable.
   asar: true,
   asarUnpack: [
-    '**/node_modules/node-pty/**/*',
-    '**/node_modules/codewhale/**/*',
-    '**/node_modules/deepseek-tui/**/*'
+    '**/kun/dist/**/*',
+    '**/kun/package*.json',
+    '**/kun/node_modules/**/*',
+    '**/node_modules/better-sqlite3/**/*',
+    '**/node_modules/bindings/**/*',
+    '**/node_modules/file-uri-to-path/**/*'
   ],
-  npmRebuild: false,
+  npmRebuild: true,
   directories: {
     output: process.env.DEEPSEEK_GUI_DIST_DIR || 'dist'
   },
-  files: ['out/**/*', 'package.json'],
+  files: [
+    'out/**/*',
+    'package.json',
+    'kun/dist/**/*',
+    'kun/package.json',
+    'kun/package-lock.json',
+    'kun/node_modules/**/*',
+    '!**/*.map',
+    '!**/*.d.ts',
+    '!**/*.ts',
+    '!**/tsconfig*.json',
+    '!**/README*',
+    '!**/CHANGELOG*',
+    '!**/node_modules/openclaw/**/*'
+  ],
   artifactName: `DeepSeek-GUI-${artifactVersion}-\${os}-\${arch}.\${ext}`,
   publish: [
     {

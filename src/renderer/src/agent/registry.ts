@@ -1,6 +1,14 @@
-import type { AgentProvider, AgentProviderId } from './types'
-import { DeepseekRuntimeProvider } from './deepseek-runtime'
+import type { AgentProvider } from './types'
+import { KunRuntimeProvider } from './kun-runtime'
 
-export function getProvider(_id: AgentProviderId): AgentProvider {
-  return new DeepseekRuntimeProvider()
+let cachedProvider: AgentProvider | null = null
+
+export function getProvider(): AgentProvider {
+  if (cachedProvider) return cachedProvider
+  cachedProvider = new KunRuntimeProvider()
+  return cachedProvider
+}
+
+export function resetProviderCacheForTests(): void {
+  cachedProvider = null
 }

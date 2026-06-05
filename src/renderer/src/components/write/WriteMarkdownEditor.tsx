@@ -4,9 +4,15 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { bracketMatching, indentOnInput } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-import { drawSelection, EditorView, highlightActiveLine, keymap } from '@codemirror/view'
+import { drawSelection, EditorView, highlightActiveLine, keymap, type ViewUpdate } from '@codemirror/view'
 import { buildInlineCompletionExtension, buildInlineCompletionPayload } from '../../write/inline-completion'
 import { writeMarkdownLivePreviewExtensions } from '../../write/markdown-live-preview'
+import { createWriteRecentEdit, type WriteRecentEdit } from '../../write/recent-edits'
+import {
+  buildWriteCanonicalTermPropagationChanges,
+  buildWriteTermPropagationChanges,
+  type WriteTermReplacementSeed
+} from '../../write/term-propagation'
 
 export type WriteSelectionAnchorRect = {
   left: number
@@ -39,6 +45,7 @@ type Props = {
   value: string
   workspaceRoot?: string | null
   filePath?: string | null
+  imageDirectory?: string | null
   appearance?: 'source' | 'live'
   livePreviewEnabled?: boolean
   readOnly?: boolean
@@ -49,7 +56,9 @@ type Props = {
   completionLongEnabled: boolean
   completionLongDebounceMs: number
   completionLongMinAcceptScore: number
+  recentEdits?: WriteRecentEdit[]
   onChange: (value: string) => void
+  onDocumentEdit?: (edits: WriteRecentEdit[]) => void
   onSelectionChange: (selection: WriteEditorSelectionState) => void
   onSaveShortcut: () => void
   onImagePasteSaved?: () => void
@@ -57,6 +66,8 @@ type Props = {
 }
 
 const externalValueSyncAnnotation = Annotation.define<boolean>()
+const termPropagationAnnotation = Annotation.define<boolean>()
+const RECENT_EDIT_CONTEXT_CHARS = 160
 
 function clampOffset(state: EditorState, offset = 0): number {
   const size = state.doc.length
@@ -141,11 +152,53 @@ function selectionState(view: EditorView): WriteEditorSelectionState {
   }
 }
 
+function recentEditsFromUpdate(update: ViewUpdate, filePath: string): WriteRecentEdit[] {
+  const path = filePath.trim()
+  if (!path || !update.docChanged) return []
+  const edits: WriteRecentEdit[] = []
+  const timestamp = Date.now()
+
+  update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    const edit = createWriteRecentEdit({
+      source: 'user',
+      timestamp,
+      filePath: path,
+      from: fromA,
+      to: toA,
+      deletedText: update.startState.sliceDoc(fromA, toA),
+      insertedText: inserted.toString(),
+      beforeContext: update.startState.sliceDoc(Math.max(0, fromA - RECENT_EDIT_CONTEXT_CHARS), fromA),
+      afterContext: update.state.sliceDoc(toB, Math.min(update.state.doc.length, toB + RECENT_EDIT_CONTEXT_CHARS))
+    })
+    if (edit) edits.push(edit)
+  })
+
+  return edits
+}
+
+function termReplacementSeedFromUpdate(update: ViewUpdate): WriteTermReplacementSeed | null {
+  const changes: WriteTermReplacementSeed[] = []
+  update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    changes.push({
+      from: fromB,
+      to: toB,
+      deletedText: update.startState.sliceDoc(fromA, toA),
+      insertedText: inserted.toString()
+    })
+  })
+  if (changes.length !== 1) return null
+  const [change] = changes
+  if (!change.deletedText || !change.insertedText) return null
+  return change
+}
+
 function buildEditorTheme(appearance: 'source' | 'live'): Extension {
   const sourceMode = appearance === 'source'
   return EditorView.theme({
     '&': {
       height: '100%',
+      minWidth: '0',
+      minHeight: '0',
       color: 'var(--ds-text)',
       backgroundColor: 'transparent',
       fontFamily: sourceMode
@@ -181,6 +234,19 @@ function buildEditorTheme(appearance: 'source' | 'live'): Extension {
   })
 }
 
+function buildInteractionExtensions(readOnly: boolean, appearance: 'source' | 'live'): Extension[] {
+  return [
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
+    EditorView.contentAttributes.of({
+      spellcheck: readOnly ? 'false' : 'true',
+      autocorrect: readOnly ? 'off' : 'on',
+      autocapitalize: readOnly ? 'off' : 'sentences',
+      'data-write-editor-mode': appearance
+    })
+  ]
+}
+
 function hasClipboardImage(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items
   if (!items) return false
@@ -208,6 +274,7 @@ export function WriteMarkdownEditor({
   value,
   workspaceRoot,
   filePath,
+  imageDirectory,
   appearance = 'live',
   livePreviewEnabled = appearance === 'live',
   readOnly = false,
@@ -218,7 +285,9 @@ export function WriteMarkdownEditor({
   completionLongEnabled,
   completionLongDebounceMs,
   completionLongMinAcceptScore,
+  recentEdits = [],
   onChange,
+  onDocumentEdit,
   onSelectionChange,
   onSaveShortcut,
   onImagePasteSaved,
@@ -231,6 +300,7 @@ export function WriteMarkdownEditor({
   const editableCompartmentRef = useRef<Compartment | null>(null)
   const workspaceRootRef = useRef(workspaceRoot ?? '')
   const filePathRef = useRef(filePath ?? '')
+  const imageDirectoryRef = useRef(imageDirectory ?? '')
   const livePreviewEnabledRef = useRef(livePreviewEnabled)
   const readOnlyRef = useRef(readOnly)
   const completionModelRef = useRef(completionModel)
@@ -240,8 +310,10 @@ export function WriteMarkdownEditor({
   const completionLongEnabledRef = useRef(completionLongEnabled)
   const completionLongDebounceMsRef = useRef(completionLongDebounceMs)
   const completionLongMinAcceptScoreRef = useRef(completionLongMinAcceptScore)
+  const recentEditsRef = useRef(recentEdits)
   const appearanceRef = useRef(appearance)
   const onChangeRef = useRef(onChange)
+  const onDocumentEditRef = useRef(onDocumentEdit)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const onSaveShortcutRef = useRef(onSaveShortcut)
   const onImagePasteSavedRef = useRef(onImagePasteSaved)
@@ -250,6 +322,7 @@ export function WriteMarkdownEditor({
 
   workspaceRootRef.current = workspaceRoot ?? ''
   filePathRef.current = filePath ?? ''
+  imageDirectoryRef.current = imageDirectory ?? ''
   livePreviewEnabledRef.current = livePreviewEnabled
   readOnlyRef.current = readOnly
   completionModelRef.current = completionModel
@@ -259,8 +332,10 @@ export function WriteMarkdownEditor({
   completionLongEnabledRef.current = completionLongEnabled
   completionLongDebounceMsRef.current = completionLongDebounceMs
   completionLongMinAcceptScoreRef.current = completionLongMinAcceptScore
+  recentEditsRef.current = recentEdits
   appearanceRef.current = appearance
   onChangeRef.current = onChange
+  onDocumentEditRef.current = onDocumentEdit
   onSelectionChangeRef.current = onSelectionChange
   onSaveShortcutRef.current = onSaveShortcut
   onImagePasteSavedRef.current = onImagePasteSaved
@@ -293,11 +368,25 @@ export function WriteMarkdownEditor({
           buildInlineCompletionPayload(context, {
             model: completionModelRef.current,
             workspaceRoot: workspaceRootRef.current,
-            mode
+            mode,
+            recentEdits: recentEditsRef.current
           })
         )
-        if (!result.ok || result.completion.length === 0) return null
-        return { text: result.completion, mode }
+        if (!result.ok) return null
+        if (result.action?.kind === 'edit') {
+          return {
+            text: result.action.replacement,
+            action: result.action,
+            mode
+          }
+        }
+        const completionText = result.action ? result.action.text : result.completion
+        if (!completionText) return null
+        return {
+          text: completionText,
+          action: result.action,
+          mode
+        }
       }
     })
 
@@ -310,10 +399,7 @@ export function WriteMarkdownEditor({
             ? writeMarkdownLivePreviewExtensions(filePathRef.current)
             : []
         ),
-        editableCompartment.of([
-          EditorState.readOnly.of(readOnlyRef.current),
-          EditorView.editable.of(!readOnlyRef.current)
-        ]),
+        editableCompartment.of(buildInteractionExtensions(readOnlyRef.current, appearanceRef.current)),
         markdown({ base: markdownLanguage, codeLanguages: languages }),
         history(),
         drawSelection(),
@@ -350,7 +436,10 @@ export function WriteMarkdownEditor({
             void window.dsGui
               .saveWorkspaceClipboardImage({
                 workspaceRoot: nextWorkspaceRoot,
-                currentFilePath: nextFilePath
+                currentFilePath: nextFilePath,
+                ...(imageDirectoryRef.current.trim()
+                  ? { imageDirectory: imageDirectoryRef.current.trim() }
+                  : {})
               })
               .then((result) => {
                 if (!result.ok) {
@@ -389,11 +478,39 @@ export function WriteMarkdownEditor({
           const externalValueSync = update.transactions.some((transaction) =>
             transaction.annotation(externalValueSyncAnnotation)
           )
+          const termPropagationSync = update.transactions.some((transaction) =>
+            transaction.annotation(termPropagationAnnotation)
+          )
           if (update.docChanged && !externalValueSync) {
+            const recentEdits = recentEditsFromUpdate(update, filePathRef.current)
+            if (recentEdits.length > 0) onDocumentEditRef.current?.(recentEdits)
             onChangeRef.current(update.state.doc.toString())
           }
           if (update.docChanged || update.selectionSet) {
             onSelectionChangeRef.current(selectionState(update.view))
+          }
+          if (update.docChanged && !externalValueSync && !termPropagationSync) {
+            const seed = termReplacementSeedFromUpdate(update)
+            if (seed) {
+              const content = update.state.doc.toString()
+              const rawPropagationChanges = [
+                ...buildWriteTermPropagationChanges(content, seed),
+                ...buildWriteCanonicalTermPropagationChanges(content, seed)
+              ]
+              const seenPropagationChanges = new Set<string>()
+              const propagationChanges = rawPropagationChanges.filter((change) => {
+                const key = `${change.from}:${change.to}`
+                if (seenPropagationChanges.has(key)) return false
+                seenPropagationChanges.add(key)
+                return true
+              })
+              if (propagationChanges.length > 0) {
+                update.view.dispatch({
+                  changes: propagationChanges,
+                  annotations: termPropagationAnnotation.of(true)
+                })
+              }
+            }
           }
         })
       ]
@@ -427,10 +544,7 @@ export function WriteMarkdownEditor({
         livePreviewCompartment.reconfigure(
           appearance === 'live' && livePreviewEnabled ? writeMarkdownLivePreviewExtensions(filePath) : []
         ),
-        editableCompartment.reconfigure([
-          EditorState.readOnly.of(readOnly),
-          EditorView.editable.of(!readOnly)
-        ])
+        editableCompartment.reconfigure(buildInteractionExtensions(readOnly, appearance))
       ]
     })
   }, [appearance, filePath, livePreviewEnabled, readOnly])
@@ -452,5 +566,5 @@ export function WriteMarkdownEditor({
     })
   }, [value])
 
-  return <div ref={hostRef} className="h-full min-h-0 w-full" />
+  return <div ref={hostRef} className="write-codemirror-host flex h-full min-h-0 w-full min-w-0" />
 }
