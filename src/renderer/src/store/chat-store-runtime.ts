@@ -468,12 +468,25 @@ export function syncTurnCompletionPoll(
   })
 }
 
+export type ThreadEventSinkBinding = {
+  threadId?: string
+  signal?: AbortSignal
+}
+
 export function buildThreadEventSink(
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
-  get: () => ChatState
+  get: () => ChatState,
+  binding: ThreadEventSinkBinding = {}
 ): ThreadEventSink {
+  const boundThreadId = binding.threadId?.trim() ?? ''
+  const isCurrentStream = (): boolean => {
+    if (binding.signal?.aborted) return false
+    return !boundThreadId || get().activeThreadId === boundThreadId
+  }
+
   return {
     onSeq: (seq) => {
+      if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       set((s) => ({
         lastSeq: seq,
@@ -482,6 +495,7 @@ export function buildThreadEventSink(
     },
     onUserMessage: (ev) =>
       set((s) => {
+        if (!isCurrentStream()) return {}
         resetBusyRecoveryAttempts()
         const flushed = flushLiveBlocks(s)
         const baseBlocks = flushed.blocks ?? s.blocks
@@ -516,6 +530,7 @@ export function buildThreadEventSink(
       }),
     onDeltas: (deltas) =>
       set((s) => {
+        if (!isCurrentStream()) return {}
         if (deltas.length === 0) return {}
         resetBusyRecoveryAttempts()
         const nextError = clearRuntimeStreamRecoveringError(s.error)
@@ -572,6 +587,7 @@ export function buildThreadEventSink(
         }
       }),
     onTool: (ev) => {
+      if (!isCurrentStream()) return
       notifyWriteWorkspaceFileRefresh(get, ev)
       set((s) => {
         resetBusyRecoveryAttempts()
@@ -627,6 +643,7 @@ export function buildThreadEventSink(
       })
     },
     onCompaction: (ev) => {
+      if (!isCurrentStream()) return
       set((s) => {
         resetBusyRecoveryAttempts()
         const base: Partial<ChatState> = {}
@@ -678,6 +695,7 @@ export function buildThreadEventSink(
       })
     },
     onReview: (ev: ReviewEventPayload) => {
+      if (!isCurrentStream()) return
       set((s) => {
         resetBusyRecoveryAttempts()
         const base: Partial<ChatState> = {}
@@ -728,6 +746,7 @@ export function buildThreadEventSink(
     },
     onApproval: (req) =>
       set((s) => {
+        if (!isCurrentStream()) return {}
         resetBusyRecoveryAttempts()
         if (s.blocks.some((b) => b.kind === 'approval' && b.approvalId === req.approvalId)) {
           return {}
@@ -753,6 +772,7 @@ export function buildThreadEventSink(
         }
       }),
     onUserInput: (req) => {
+      if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       set((s) => {
@@ -779,6 +799,7 @@ export function buildThreadEventSink(
       })
     },
     onUserInputStatus: (ev) => {
+      if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       if (ev.status === 'submitted' && get().busy) {
         armBusyWatchdog(set, get)
@@ -800,6 +821,7 @@ export function buildThreadEventSink(
       }))
     },
     onRuntimeStatus: (ev) => {
+      if (!isCurrentStream()) return
       set((s) => {
         resetBusyRecoveryAttempts()
         const base: Partial<ChatState> = {}
@@ -829,6 +851,7 @@ export function buildThreadEventSink(
       })
     },
     onGoal: (ev) => {
+      if (!isCurrentStream()) return
       if (!ev.threadId) return
       resetBusyRecoveryAttempts()
       set((s) => {
@@ -864,6 +887,7 @@ export function buildThreadEventSink(
       })
     },
     onTodos: (ev) => {
+      if (!isCurrentStream()) return
       if (!ev.threadId) return
       resetBusyRecoveryAttempts()
       set((s) => {
@@ -889,6 +913,7 @@ export function buildThreadEventSink(
       })
     },
     onTurnComplete: () => {
+      if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       const completedState = get()
@@ -939,6 +964,7 @@ export function buildThreadEventSink(
       void get().drainQueuedMessages()
     },
     onError: (err) => {
+      if (!isCurrentStream()) return
       resetBusyRecoveryAttempts()
       clearBusyWatchdog()
       const state = get()
@@ -964,6 +990,7 @@ export function buildThreadEventSink(
       if (get().busy) armBusyWatchdog(set, get)
     },
     onUsage: () => {
+      if (!isCurrentStream()) return
       set((s) => ({ usageRefreshKey: s.usageRefreshKey + 1 }))
     }
   }
