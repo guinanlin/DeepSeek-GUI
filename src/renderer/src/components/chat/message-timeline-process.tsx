@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Minimize2 } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
-import { looksLikeUnifiedDiff } from '../../lib/diff-stats'
+import { extractUnifiedDiffText } from '../../lib/diff-stats'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
@@ -823,12 +823,14 @@ function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail
       return { kind: 'none' }
     }
     const isError = block.status === 'error'
-    const isPatch =
-      block.toolKind === 'file_change' && !isError && looksLikeUnifiedDiff(detailText)
+    const patchText =
+      block.toolKind === 'file_change' && !isError
+        ? extractUnifiedDiffText(detailText)
+        : undefined
     return {
       kind: 'tool',
-      text: block.detail!,
-      isPatch,
+      text: patchText ?? block.detail!,
+      isPatch: patchText !== undefined,
       isError,
       filePath: block.filePath
     }
