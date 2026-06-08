@@ -270,7 +270,7 @@
   "baseUrl": "Service URL (optional)",
   "baseUrlDesc": "Default model service endpoint. Leave empty to use the official DeepSeek endpoint.",
   "baseUrlSharedDesc": "Default model service endpoint. Leave empty to use the official DeepSeek endpoint.",
-  "baseUrlPlaceholder": "e.g. https://api.deepseek.com/beta",
+  "baseUrlPlaceholder": "e.g. https://api.deepseek.com",
   "showSecret": "Show value",
   "hideSecret": "Hide value",
   "firstRunBadge": "Initial setup",

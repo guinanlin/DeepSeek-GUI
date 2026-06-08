@@ -33,7 +33,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.write.inlineCompletion.enabled).toBe(true)
     expect(loaded.write.inlineCompletion.retrievalEnabled).toBe(true)
     expect(loaded.write.inlineCompletion.longCompletionEnabled).toBe(true)
-    expect(loaded.provider.baseUrl).toBe('https://api.deepseek.com/beta')
+    expect(loaded.provider.baseUrl).toBe('https://api.deepseek.com')
     expect(loaded.write.inlineCompletion.apiKey).toBe('')
     expect(loaded.write.inlineCompletion.baseUrl).toBe('')
     expect(loaded.write.inlineCompletion.inheritModel).toBe(true)
